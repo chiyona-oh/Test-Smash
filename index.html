@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>시험기간 스트레스 해소용 시험지 뿌시기 게임</title>
+  <style>
+    :root { --w: 360px; }
+
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      background: #111;
+      color: #fff;
+      font-family: system-ui, sans-serif;
+      overflow: hidden; /* 모바일에서 스크롤로 화면이 밀리는 것 방지 */
+    }
+
+    .wrap {
+      height: 100dvh; /* 모바일 동적 높이 */
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 10px calc(10px + env(safe-area-inset-bottom));
+      box-sizing: border-box;
+    }
+
+    .title {
+      width: min(var(--w), 96vw);
+      font-size: 16px;
+      font-weight: 800;
+      padding: 10px 12px;
+      border-radius: 14px;
+      text-align: center;
+      color: #ffe66b;
+      background: linear-gradient(180deg, rgba(255,230,107,0.10), rgba(0,0,0,0.25));
+      border: 1px solid rgba(255,230,107,0.35);
+      text-shadow: 0 1px 0 rgba(0,0,0,0.55);
+      letter-spacing: -0.2px;
+      flex: 0 0 auto;
+    }
+
+    .hud {
+      width: min(var(--w), 96vw);
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      font-size: 13px;
+      opacity: 0.95;
+      flex: 0 0 auto;
+    }
+    .hud > div {
+      background: rgba(255,255,255,0.06);
+      padding: 8px 10px;
+      border-radius: 10px;
+      box-sizing: border-box;
+    }
+
+    /* 캔버스는 남는 공간을 전부 먹도록 */
+    .game-wrap {
+      width: min(var(--w), 96vw);
+      flex: 1 1 auto;
+      display: flex;
+      align-items: stretch;
+    }
+
+    canvas {
+      width: 100%;
+      height: 100%; /* 부모 높이에 맞춤 */
+      background: #1b1b1b;
+      border: 1px solid #333;
+      border-radius: 12px;
+      touch-action: manipulation;
+      display: block;
+    }
+
+    .btns {
+      width: min(var(--w), 96vw);
+      display: flex;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
+    button {
+      flex: 1;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 0;
+      cursor: pointer;
+    }
+
+    .footer {
+      width: min(var(--w), 96vw);
+      text-align: center;
+      font-size: 12px;
+      opacity: 0.65;
+      padding: 2px 0 0;
+      flex: 0 0 auto;
+    }
+
+    /* 작은 화면에서 타이틀/글 크기 살짝 줄여 한 화면에 더 잘 들어오게 */
+    @media (max-height: 700px) {
+      .title { font-size: 15px; padding: 8px 10px; }
+      .hud { font-size: 12px; }
+      button { padding: 9px 10px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">시험기간 스트레스 해소용 시험지 뿌시기 게임</div>
+
+    <div class="hud">
+      <div id="grade">학년: 중학교 1학년</div>
+      <div id="progress">진행: 0 / 10 (클릭: 0)</div>
+    </div>
+
+    <div class="game-wrap">
+      <!-- JS에서 내부 해상도(canvas.width/height)를 기기 픽셀에 맞게 조정 -->
+      <canvas id="game"></canvas>
+    </div>
+
+    <div class="btns">
+      <button id="startBtn">시작</button>
+      <button id="restartBtn">리셋</button>
+      <button id="muteBtn">🔊 음악</button>
+    </div>
+
+    <div class="footer">Created by Chiyona</div>
+  </div>
+
+  <script>
+    // 중복 실행 방지
+    if (window.__PAPER_GAME_LOADED__) {
+      console.warn("Game already loaded - preventing duplicate init.");
+      throw new Error("Duplicate load prevented");
+    }
+    window.__PAPER_GAME_LOADED__ = true;
+
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d", { alpha: false });
+
+    const gradeEl = document.getElementById("grade");
+    const progressEl = document.getElementById("progress");
+
+    const startBtn = document.getElementById("startBtn");
+    const restartBtn = document.getElementById("restartBtn");
+    const muteBtn = document.getElementById("muteBtn");
+
+    // ====== 스테이지 규칙 ======
+    const STAGES = [
+      { label: "중학교 1학년", total: 10, pass: 5,  school: "middle" },
+      { label: "중학교 2학년", total: 15, pass: 10, school: "middle" },
+      { label: "중학교 3학년", total: 20, pass: 15, school: "middle" },
+      { label: "고등학교 1학년", total: 25, pass: 20, school: "high"   },
+      { label: "고등학교 2학년", total: 30, pass: 25, school: "high"   },
+      { label: "고등학교 3학년", total: 35, pass: 30, school: "high"   },
+    ];
+
+    // ====== 캔버스 리사이즈(모바일 화면에 딱 맞게) ======
+    function resizeCanvasToCSS() {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2); // 과도한 DPR은 성능 부담 → 2로 제한
+
+      const w = Math.max(1, Math.floor(rect.width * dpr));
+      const h = Math.max(1, Math.floor(rect.height * dpr));
+
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+    }
+
+    window.addEventListener("resize", () => {
+      resizeCanvasToCSS();
+      draw(); // 화면 변경 즉시 다시 그리기
+    });
+
+    // ====== 비주얼 ======
+    const PAPER_W = 92;
+    const PAPER_H = 58;
+
+    function getPaperStyle() {
+      const school = STAGES[stageIndex].school;
+      if (school === "high") {
+        return {
+          fill: "#ffe66b",
+          stroke: "rgba(0,0,0,0.45)",
+          line: "rgba(0,0,0,0.18)",
+          text: "rgba(0,0,0,0.78)"
+        };
+      }
+      return {
+        fill: "#f4f4f4",
+        stroke: "rgba(0,0,0,0.35)",
+        line: "rgba(0,0,0,0.15)",
+        text: "rgba(0,0,0,0.72)"
+      };
+    }
+
+    // ====== 난이도 ======
+    function getSpawnIntervalMs() {
+      const base = 520;
+      const perStage = 45 * stageIndex;
+      const highBoost = (STAGES[stageIndex].school === "high") ? 80 : 0;
+      return Math.max(160, base - perStage - highBoost);
+    }
+
+    function getFallSpeed() {
+      const baseMin = 260;
+      const baseMax = 380;
+
+      const perStageMin = 22 * stageIndex;
+      const perStageMax = 30 * stageIndex;
+
+      const highAddMin = (STAGES[stageIndex].school === "high") ? 60 : 0;
+      const highAddMax = (STAGES[stageIndex].school === "high") ? 90 : 0;
+
+      const min = baseMin + perStageMin + highAddMin;
+      const max = baseMax + perStageMax + highAddMax;
+
+      return min + Math.random() * (max - min);
+    }
+
+    // ====== 오디오 (모바일 강화) ======
+    let audioCtx = null;
+    let musicOn = true;
+    let bgmTimer = null;
+
+    function ensureAudio() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      return audioCtx;
+    }
+
+    async function unlockAudio() {
+      // 모바일은 사용자 제스처 이후에만 resume이 성공합니다.
+      const ac = ensureAudio();
+      if (ac.state === "suspended") {
+        try { await ac.resume(); } catch (e) {}
+      }
+    }
+
+    function playTone(freq, durationSec, type = "sine", gain = 0.06) {
+      const ac = ensureAudio();
+      const now = ac.currentTime;
+
+      const o = ac.createOscillator();
+      const g = ac.createGain();
+
+      o.type = type;
+      o.frequency.value = freq;
+
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(gain, now + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + durationSec);
+
+      o.connect(g);
+      g.connect(ac.destination);
+
+      o.start(now);
+      o.stop(now + durationSec + 0.02);
+    }
+
+    function startBgm() {
+      if (!musicOn) return;
+      stopBgm();
+
+      const seq = [523.25, 659.25, 783.99, 659.25, 587.33, 659.25, 523.25, 392.00];
+      let idx = 0;
+
+      bgmTimer = setInterval(() => {
+        if (!musicOn) return;
+        // AudioContext가 다시 suspended 될 수 있으니 방어
+        if (!audioCtx || audioCtx.state !== "running") return;
+        playTone(seq[idx % seq.length], 0.18, "square", 0.045);
+        idx++;
+      }, 210);
+    }
+
+    function stopBgm() {
+      if (bgmTimer) {
+        clearInterval(bgmTimer);
+        bgmTimer = null;
+      }
+    }
+
+    function playSuccessJingle() {
+      if (!musicOn) return;
+      if (!audioCtx || audioCtx.state !== "running") return;
+
+      const notes = [523.25, 659.25, 783.99, 1046.50];
+      let t = 0;
+      for (const f of notes) {
+        setTimeout(() => {
+          if (audioCtx && audioCtx.state === "running") {
+            playTone(f, 0.16, "triangle", 0.08);
+          }
+        }, t);
+        t += 170;
+      }
+    }
+
+    function toggleMusic() {
+      musicOn = !musicOn;
+      muteBtn.textContent = musicOn ? "🔊 음악" : "🔇 무음";
+      if (!musicOn) stopBgm();
+      else if (running) startBgm();
+    }
+
+    // ====== 게임 상태 ======
+    let stageIndex = 0;
+
+    let running = false;
+    let stageActive = false;
+    let pausedOverlay = false;
+
+    const papers = [];
+    let lastTime = 0;
+    let lastSpawn = 0;
+
+    let resolvedCount = 0;
+    let hitCount = 0;
+
+    let overlay = null; // { type, until, text1, text2 }
+
+    function currentStage() {
+      return STAGES[stageIndex];
+    }
+
+    function updateHUD() {
+      const s = currentStage();
+      gradeEl.textContent = `학년: ${s.label}`;
+      progressEl.textContent = `진행: ${resolvedCount} / ${s.total} (클릭: ${hitCount})`;
+    }
+
+    function startStage() {
+      stageActive = true;
+      pausedOverlay = false;
+      overlay = null;
+
+      resolvedCount = 0;
+      hitCount = 0;
+      papers.length = 0;
+
+      lastSpawn = 0;
+      updateHUD();
+    }
+
+    function resetGame() {
+      running = false;
+      stageActive = false;
+      pausedOverlay = false;
+
+      stageIndex = 0;
+      resolvedCount = 0;
+      hitCount = 0;
+
+      papers.length = 0;
+      lastTime = 0;
+      lastSpawn = 0;
+      overlay = null;
+
+      stopBgm();
+      draw();
+      updateHUD();
+    }
+
+    function startLoopIfNeeded() {
+      if (running) return;
+      running = true;
+      lastTime = performance.now();
+      if (musicOn && audioCtx && audioCtx.state === "running") startBgm();
+      requestAnimationFrame(loop);
+    }
+
+    function spawnPaper() {
+      // canvas 내부 좌표계(픽셀) 기준으로 생성해야 함
+      const w = canvas.width;
+      const h = canvas.height;
+
+      // 캔버스 리사이즈 시 DPR이 적용되므로 종이 크기도 DPR에 맞춰 스케일
+      // 다만 너무 커지면 게임 난이도가 바뀌므로 "화면 비율" 유지용으로 폭 기준 스케일
+      const scale = Math.max(0.85, Math.min(1.25, w / (360 * Math.min(window.devicePixelRatio || 1, 2))));
+
+      const pw = PAPER_W * scale;
+      const ph = PAPER_H * scale;
+
+      const x = Math.random() * Math.max(1, (w - pw));
+      const y = -ph;
+      const speed = getFallSpeed() * scale;
+
+      papers.push({ x, y, w: pw, h: ph, speed });
+    }
+
+    function loop(t) {
+      if (!running) return;
+
+      const dt = (t - lastTime) / 1000;
+      lastTime = t;
+
+      if (stageActive && !pausedOverlay) {
+        const s = currentStage();
+        const interval = getSpawnIntervalMs();
+
+        if (resolvedCount + papers.length < s.total) {
+          if (t - lastSpawn > interval) {
+            spawnPaper();
+            lastSpawn = t;
+          }
+        }
+
+        for (let i = papers.length - 1; i >= 0; i--) {
+          papers[i].y += papers[i].speed * dt;
+
+          if (papers[i].y > canvas.height) {
+            papers.splice(i, 1);
+            resolvedCount += 1;
+            checkStageEnd(t);
+          }
+        }
+
+        checkStageEnd(t);
+      }
+
+      draw();
+
+      if (overlay && t < overlay.until) {
+        drawOverlay(overlay.type, overlay.text1, overlay.text2);
+      } else if (overlay && t >= overlay.until) {
+        const wasSuccess = overlay.type === "success";
+        overlay = null;
+
+        if (wasSuccess) {
+          // 성공 후: 자동 진행 금지 → 멈추고 Start를 누르면 다음 시작
+          stageActive = false;
+          pausedOverlay = false;
+
+          if (stageIndex + 1 < STAGES.length) {
+            stageIndex += 1;
+            updateHUD();
+            drawOverlay("success", "성공!", "다음 단계는 시작을 누르세요");
+          } else {
+            running = false;
+            stopBgm();
+            drawOverlay("success", "전부 통과!", "고3까지 클리어!");
+          }
+        } else {
+          running = false;
+          stopBgm();
+          drawFailFinal();
+        }
+      }
+
+      updateHUD();
+
+      if (running) requestAnimationFrame(loop);
+    }
+
+    function checkStageEnd(t) {
+      const s = currentStage();
+      const allSpawned = (resolvedCount + papers.length) >= s.total;
+
+      if (allSpawned && papers.length === 0) {
+        pausedOverlay = true;
+
+        if (hitCount >= s.pass) {
+          overlay = { type: "success", until: t + 1200, text1: "성공!", text2: `${s.label} 통과!` };
+          playSuccessJingle();
+        } else {
+          overlay = { type: "fail", until: t + 1400, text1: "실패!", text2: `클릭 ${hitCount}개 (필요: ${s.pass}개)` };
+        }
+      }
+    }
+
+    function draw() {
+      // 배경
+      ctx.fillStyle = "#1b1b1b";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // 상단 얇은 바(텍스트 없음)
+      ctx.fillStyle = "rgba(255,255,255,0.04)";
+      ctx.fillRect(0, 0, canvas.width, Math.min(44, canvas.height * 0.10));
+
+      const style = getPaperStyle();
+
+      for (const p of papers) {
+        ctx.fillStyle = style.fill;
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+
+        ctx.strokeStyle = style.stroke;
+        ctx.strokeRect(p.x, p.y, p.w, p.h);
+
+        ctx.fillStyle = style.line;
+        ctx.fillRect(p.x + 10, p.y + 14, p.w - 20, 3);
+        ctx.fillRect(p.x + 10, p.y + 24, p.w - 34, 3);
+        ctx.fillRect(p.x + 10, p.y + 34, p.w - 26, 3);
+
+        ctx.fillStyle = style.text;
+        ctx.font = `${Math.max(12, Math.floor(p.h * 0.22))}px system-ui`;
+        ctx.fillText("시험지", p.x + 10, p.y + p.h - 8);
+      }
+
+      // 바닥선
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.beginPath();
+      ctx.moveTo(0, canvas.height - 1);
+      ctx.lineTo(canvas.width, canvas.height - 1);
+      ctx.stroke();
+
+      // 대기 안내
+      if (!running) {
+        drawDimText("시작을 눌러 플레이");
+      } else if (!stageActive) {
+        drawDimText("시작을 눌러 스테이지 시작");
+      }
+    }
+
+    function drawDimText(text) {
+      ctx.fillStyle = "rgba(0,0,0,0.40)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#fff";
+      ctx.font = `${Math.max(16, Math.floor(canvas.height * 0.03))}px system-ui`;
+      ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+      ctx.textAlign = "start";
+    }
+
+    function drawOverlay(type, text1, text2) {
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#fff";
+      ctx.font = `${Math.max(26, Math.floor(canvas.height * 0.05))}px system-ui`;
+      ctx.fillText(text1, canvas.width / 2, canvas.height / 2 - 12);
+
+      ctx.font = `${Math.max(14, Math.floor(canvas.height * 0.028))}px system-ui`;
+      ctx.fillText(text2, canvas.width / 2, canvas.height / 2 + 22);
+      ctx.textAlign = "start";
+    }
+
+    function drawFailFinal() {
+      const s = currentStage();
+
+      ctx.fillStyle = "rgba(0,0,0,0.60)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = "#fff";
+      ctx.textAlign = "center";
+      ctx.font = `${Math.max(24, Math.floor(canvas.height * 0.05))}px system-ui`;
+      ctx.fillText("FAILED", canvas.width / 2, canvas.height / 2 - 26);
+
+      ctx.font = `${Math.max(14, Math.floor(canvas.height * 0.028))}px system-ui`;
+      ctx.fillText(`${s.label}에서 실패`, canvas.width / 2, canvas.height / 2 + 6);
+      ctx.fillText(`클릭 ${hitCount}개 / 필요 ${s.pass}개`, canvas.width / 2, canvas.height / 2 + 30);
+      ctx.fillText("리셋을 눌러 다시 시작", canvas.width / 2, canvas.height / 2 + 56);
+
+      ctx.textAlign = "start";
+    }
+
+    // 입력(터치/클릭)
+    function getPointerXY(e) {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const x = (e.clientX - rect.left) * dpr;
+      const y = (e.clientY - rect.top) * dpr;
+      return { x, y };
+    }
+
+    function handlePointer(e) {
+      if (!running || !stageActive || pausedOverlay) return;
+
+      const { x, y } = getPointerXY(e);
+
+      for (let i = papers.length - 1; i >= 0; i--) {
+        const p = papers[i];
+        if (x >= p.x && x <= p.x + p.w && y >= p.y && y <= p.y + p.h) {
+          papers.splice(i, 1);
+          hitCount += 1;
+          resolvedCount += 1;
+          return;
+        }
+      }
+    }
+
+    // 모바일 소리 문제 대응: 캔버스를 탭해도 오디오 unlock 시도
+    canvas.addEventListener("pointerdown", async (e) => {
+      await unlockAudio();
+      if (musicOn && running && !bgmTimer && audioCtx && audioCtx.state === "running") {
+        startBgm();
+      }
+      handlePointer(e);
+    });
+
+    startBtn.addEventListener("click", async () => {
+      await unlockAudio();
+      resizeCanvasToCSS(); // 시작 누를 때 화면 크기 확정
+
+      startLoopIfNeeded();
+
+      if (!stageActive) {
+        startStage();
+      }
+
+      // BGM 보장
+      if (musicOn && audioCtx && audioCtx.state === "running") startBgm();
+    });
+
+    restartBtn.addEventListener("click", () => {
+      resetGame();
+    });
+
+    muteBtn.addEventListener("click", async () => {
+      await unlockAudio();
+      toggleMusic();
+    });
+
+    // 초기화(로드 시 캔버스 크기 맞추기)
+    resizeCanvasToCSS();
+    updateHUD();
+    draw();
+  </script>
+</body>
+</html>
